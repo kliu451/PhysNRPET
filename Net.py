@@ -7,7 +7,7 @@ import pytorch_lightning as pl
 import wandb
 from Utils import torch_interp_1d, TAC_2TC_KM
 
-device = torch.device("mps")#"cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
 
 class SineLayer(nn.Module):
     # See paper sec. 3.2, final paragraph, and supplement Sec. 1.5 for discussion of omega_0.
@@ -67,7 +67,7 @@ class SirenPNR(pl.LightningModule):
         with torch.no_grad():
             self.k_linear.weight.uniform_(-np.sqrt(6 / hidden_features) / hidden_omega_0,
                                            np.sqrt(6 / hidden_features) / hidden_omega_0)
-        idif_path = 'IDIF.txt'
+        idif_path = 'Uncertainty_Eval/DynamicFDG_25_IDIF.txt'
         sample_time = np.loadtxt(idif_path, delimiter="\t", usecols=[0], skiprows=1)
         self.sample_time = torch.tensor(sample_time, dtype=torch.float32).to(device)
         # print("sample time: ", self.sample_time)
@@ -88,8 +88,8 @@ class SirenPNR(pl.LightningModule):
         # x = xfm[:,0:3]
         # fm = xfm[:,3:]
         if self.B is not None:
-            x = torch.matmul(2. * torch.pi * x, self.B.T).to(device)
-            x = torch.cat([torch.sin(x), torch.cos(x)], -1).to(device)
+            x = torch.matmul(2. * torch.pi * x.to(self.B.device), self.B.T)
+            x = torch.cat([torch.sin(x), torch.cos(x)], -1)
         
         xf = self.net(x)
         ki = torch.nn.Softplus(beta=5)(self.k_linear(xf))
@@ -119,7 +119,7 @@ class SirenPNR(pl.LightningModule):
     def validation_step(self, batch):
         x, y = batch
         k_hat = self(x)
-        h, w = 170, 170
+        h, w = 256, 256
         ki = k_hat.view(h,w,4)
         # pass
         return

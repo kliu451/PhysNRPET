@@ -170,3 +170,10 @@ wandb/
 *.png
 *.pt
 *.txt
+
+# Dataset / checkpoints (sensitive data)
+Uncertainty_Eval/
+checkpoints/
+
+# OS
+.DS_Store

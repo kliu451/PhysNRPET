@@ -6,8 +6,9 @@ from torch.utils.data import Dataset
 import monai
 from monai.transforms import LoadImaged, ScaleIntensityRanged, ToTensord
 from natsort import natsorted
+from tqdm import tqdm
 
-device = torch.device("mps")#"cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
 
 class DynPETQSDataset(Dataset):
     def __init__(self, sample_size=2):
@@ -22,7 +23,7 @@ class DynPETQSDataset(Dataset):
             image_tensor (torch.Tensor): A 4D tensor representing the dynamic PET image volume.
         """
 
-        data_dir = "/home/DynamicFDGPET/NIFTY"
+        data_dir = "Uncertainty_Eval/20_pat_25"
         image_tensor = natsorted(glob.glob(os.path.join(data_dir, "PET_*")))
         image_dict = [
             {"image": image_name} for image_name in image_tensor
@@ -34,10 +35,14 @@ class DynPETQSDataset(Dataset):
             ToTensord(keys=["image"])
         ])
 
-        dynpetdata = transforms(image_dict)
-        image_tensor = torch.stack([entry['image'] for entry in dynpetdata], dim=0)
-        # image_tensor = image_tensor[:, 94:350, 230:231, 204:460]
-        # torch.save(image_tensor, 'liverslice09.pt')
+        if os.path.exists('/tmp/liverslice09.pt'):
+            image_tensor = torch.load('/tmp/liverslice09.pt', weights_only=False)
+            print("Loaded PET data from cache.")
+        else:
+            dynpetdata = [transforms(d) for d in tqdm(image_dict, desc="Loading PET frames")]
+            image_tensor = torch.stack([entry['image'] for entry in dynpetdata], dim=0)
+            image_tensor = image_tensor[:, 94:350, 230:231, 204:460]
+            torch.save(image_tensor, '/tmp/liverslice09.pt')
         # image_tensor = torch.load('liverslice09.pt', weights_only=False)
         # ctimage_tensor = torch.load('ctliverslice09.pt', weights_only=False)
         # ctfm_tensor = torch.load('ctfmslice09.pt', weights_only=False).to("cpu")
@@ -78,7 +83,7 @@ class Val2DPETDataset(Dataset):
     def __init__(self):
         torch.manual_seed(0)
         np.random.seed(seed=0)
-        image = torch.load('liverslice09.pt', weights_only=False)
+        image = torch.load('/tmp/liverslice09.pt', weights_only=False)
         img = image[61] #pick a frame to validate
         # Generate coordinates
         D, H, W = img.shape
