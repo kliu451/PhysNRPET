@@ -83,6 +83,7 @@ class SirenPNR(pl.LightningModule):
             idx = torch.argmin(torch.abs(self.t - st))
             self.matching_indices.append(idx)
         self.matching_indices = torch.stack(self.matching_indices)
+        self.val_spatial_shape = None
 
     def forward(self, x):#xfm when using foundation model features 
         # x = xfm[:,0:3]
@@ -119,8 +120,5 @@ class SirenPNR(pl.LightningModule):
     def validation_step(self, batch):
         x, y = batch
         k_hat = self(x)
-        h, w = 256, 256
-        ki = k_hat.view(h,w,4)
-        # pass
         return
 

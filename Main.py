@@ -12,14 +12,15 @@ from pytorch_lightning.loggers import WandbLogger
 import wandb
 from Net import SirenPNR
 from PetDatasets import DynPETQSDataset, Val2DPETDataset
-torch.autograd.set_detect_anomaly(True)
+torch.autograd.set_detect_anomaly(False)
 torch.set_float32_matmul_precision('medium')
 torch.manual_seed(seed=0)
 torch.cuda.manual_seed(seed=0)
 torch.mps.manual_seed(seed=0)
 
 import multiprocessing as mp
-mp.set_start_method('spawn', force=True)
+if torch.cuda.is_available():
+    mp.set_start_method('spawn', force=True)
 
 def preflight_check():
     data_dir = "Uncertainty_Eval/20_pat_25"
@@ -44,7 +45,7 @@ def main_inr():
     print("len train: ", len(train_data))
     val_data = Val2DPETDataset()
     train_loader = DataLoader(train_data, batch_size=128, num_workers=0)
-    val_loader = DataLoader(val_data, batch_size=len(val_data), num_workers=0)
+    val_loader = DataLoader(val_data, batch_size=4096, num_workers=0)
     wandb_logger = WandbLogger(project="PhysNRPET")
     lr_monitor = LearningRateMonitor(logging_interval='epoch')
     checkpoint_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "checkpoints")
@@ -54,8 +55,9 @@ def main_inr():
     mapping_size = 256
     B_gauss = torch.randn((mapping_size, 3)).to(device) #coords
     B_gausshu = torch.randn((mapping_size, 4)).to(device) #coords + hu
-    model =SirenPNR(in_features=mapping_size*2, B=B_gauss*10, out_features=4,
+    model = SirenPNR(in_features=mapping_size*2, B=B_gauss*10, out_features=4,
                 hidden_layers=3)
+    model.val_spatial_shape = val_data.spatial_shape
     # model =SirenPNR(in_features=mapping_size*2, B=B_gausshu*10, out_features=4,
     #             hidden_layers=3)
     # model =SirenPNR(in_features=mapping_size*2+4096, B=B_gauss*10, out_features=4,

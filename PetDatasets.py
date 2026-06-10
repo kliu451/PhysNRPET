@@ -35,14 +35,15 @@ class DynPETQSDataset(Dataset):
             ToTensord(keys=["image"])
         ])
 
-        if os.path.exists('/tmp/liverslice09.pt'):
-            image_tensor = torch.load('/tmp/liverslice09.pt', weights_only=False)
+        cache_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "liverslice09.pt")
+        if os.path.exists(cache_path):
+            image_tensor = torch.load(cache_path, weights_only=False)
             print("Loaded PET data from cache.")
         else:
             dynpetdata = [transforms(d) for d in tqdm(image_dict, desc="Loading PET frames")]
             image_tensor = torch.stack([entry['image'] for entry in dynpetdata], dim=0)
-            image_tensor = image_tensor[:, 94:350, 230:231, 204:460]
-            torch.save(image_tensor, '/tmp/liverslice09.pt')
+            image_tensor = image_tensor[:, :, 230:231, :]
+            torch.save(image_tensor, cache_path)
         # image_tensor = torch.load('liverslice09.pt', weights_only=False)
         # ctimage_tensor = torch.load('ctliverslice09.pt', weights_only=False)
         # ctfm_tensor = torch.load('ctfmslice09.pt', weights_only=False).to("cpu")
@@ -50,6 +51,7 @@ class DynPETQSDataset(Dataset):
         T, D, H, W = image_tensor.shape
         print("Image Tensor Shape: ", image_tensor.shape)
         print("N images : ", T)
+        self.spatial_shape = (D, W)
         self.coords = torch.stack(torch.meshgrid(torch.arange(D),
                                   torch.arange(H), torch.arange(W)),
                                   -1).reshape(-1, 3).float()
@@ -83,19 +85,22 @@ class Val2DPETDataset(Dataset):
     def __init__(self):
         torch.manual_seed(0)
         np.random.seed(seed=0)
-        image = torch.load('/tmp/liverslice09.pt', weights_only=False)
-        img = image[61] #pick a frame to validate
+        cache_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "liverslice09.pt")
+        image = torch.load(cache_path, weights_only=False)
+        img = image[61].clone() #pick a frame to validate
+        del image
         # Generate coordinates
         D, H, W = img.shape
         T = 1
+        self.spatial_shape = (D, W)
         self.coords = torch.stack(torch.meshgrid(torch.arange(D),
                                   torch.arange(H), torch.arange(W)),
                                   -1)
         # Normalize coordinates to [-1, 1]
-        self.coords = self.coords[:,0,:].unsqueeze(2).reshape(-1, 3).float() #60
+        self.coords = self.coords[:,0,:].unsqueeze(2).reshape(-1, 3).float()
         self.coords = self.coords / torch.tensor([D/2, H/2, W/2]) - 1
         # Flatten the image volume to match coordinates
-        self.intensities = img[:,0,:].unsqueeze(2) #60
+        self.intensities = img[:,0,:].unsqueeze(2)
         del img
         # ctimage_tensor = torch.load('ctliverslice09.pt', weights_only=False)
         # self.huvalues = ctimage_tensor[:,0,:]
