@@ -633,7 +633,8 @@ def main():
                    help="Model file. For --fit: pretrained SirenPNR (default: model.pt). "
                         "For --eval: saved hetero model (default: hetero_model.pt).")
     p.add_argument("--save_model", default="hetero_model.pt", help="Where to save the trained hetero model")
-    p.add_argument("--output_dir", default="laplace_outputs",  help="Directory for output files")
+    p.add_argument("--output_dir",  default="aleatoric_outputs", help="Directory for aleatoric output files")
+    p.add_argument("--laplace_dir", default="laplace_outputs",   help="Directory to read saved Laplace states from (Part 1)")
     p.add_argument("--z_slice",    type=int, default=230,      help="Axial slice index")
     p.add_argument("--max_epochs", type=int, default=50)
     p.add_argument("--batch_size", type=int, default=128)
@@ -671,7 +672,7 @@ def main():
         print("\n" + "=" * 60)
         print("  PART 1 — HOMOSCEDASTIC ALEATORIC UNCERTAINTY")
         print("=" * 60)
-        sigma_dict = homo_load(args.output_dir)
+        sigma_dict = homo_load(args.laplace_dir)
         if sigma_dict:
             homo_visualize(sigma_dict, save_dir=args.output_dir, image_frame=base_image, ts=ts)
         else:
