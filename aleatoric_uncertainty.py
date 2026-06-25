@@ -97,8 +97,8 @@ def homo_load(laplace_dir: str = "laplace_outputs") -> dict:
     return results
 
 
-def homo_visualize(sigma_dict: dict, save_dir: str = "laplace_outputs", image_frame: np.ndarray | None = None):
-    ts     = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+def homo_visualize(sigma_dict: dict, save_dir: str = "laplace_outputs", image_frame: np.ndarray | None = None, ts: str | None = None):
+    ts     = ts or datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     labels = list(sigma_dict.keys())
     sigmas = [sigma_dict[h]["sigma_noise"]     for h in labels]
     priors = [sigma_dict[h]["prior_precision"] for h in labels]
@@ -465,9 +465,10 @@ def combined_visualize(
     spatial_shape:   tuple,
     base_image:      np.ndarray,
     save_dir:        str = "laplace_outputs",
+    ts:              str | None = None,
 ) -> str:
     """PET | Part 1 (homo) | Part 2 (hetero) | Image-based (Poisson) — all as overlays."""
-    ts  = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    ts  = ts or datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     h, w = spatial_shape
 
     sigmas          = [v["sigma_noise"] for v in sigma_dict.values()]
@@ -578,7 +579,7 @@ def image_noise_visualize(
     axes[0].set_title("PET image  (frame 61, z=230)")
     axes[0].axis("off")
 
-    axes[1].imshow(img_norm, cmap="gray", alpha=0 .4)
+    axes[1].imshow(img_norm, cmap="gray", alpha=0.4)
     vp1, vp99 = np.percentile(poisson_sigma, 1), np.percentile(poisson_sigma, 99)
     im1 = axes[1].imshow(poisson_sigma, cmap="plasma", alpha=0.6, vmin=vp1, vmax=vp99)
     axes[1].set_title(
@@ -672,7 +673,7 @@ def main():
         print("=" * 60)
         sigma_dict = homo_load(args.output_dir)
         if sigma_dict:
-            homo_visualize(sigma_dict, save_dir=args.output_dir, image_frame=base_image)
+            homo_visualize(sigma_dict, save_dir=args.output_dir, image_frame=base_image, ts=ts)
         else:
             print("[WARN] No Laplace states found. Cannot run Part 1 visualization.")
 
@@ -767,7 +768,7 @@ def main():
         combined_visualize(
             sigma_dict, aleatoric_sigma,
             val_data.spatial_shape, base_image,
-            save_dir=args.output_dir,
+            save_dir=args.output_dir, ts=ts,
         )
 
 
