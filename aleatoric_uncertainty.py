@@ -164,7 +164,7 @@ def homo_visualize(sigma_dict: dict, save_dir: str = "laplace_outputs", image_fr
         )
         ax_overlay.axis("off")
         ax_overlay.text(
-            0.5, 0.5, f"σ_aleatoric = {sigma_mean:.5f}\n(constant)",
+            0.5, 0.5, f"aleatoric σ = {sigma_mean:.5f}\n(noise std, constant)",
             transform=ax_overlay.transAxes, ha="center", va="center",
             fontsize=12, color="white", fontweight="bold",
             bbox=dict(boxstyle="round", facecolor="black", alpha=0.6),
@@ -416,8 +416,10 @@ def hetero_visualize(
 
     fig.suptitle(
         "Heteroscedastic Aleatoric Uncertainty\n"
-        "MAP kinetic parameters (left)  |  per-voxel σ_aleatoric (right)",
-        fontsize=12,
+        "MAP kinetic parameters (left)   |   per-voxel aleatoric uncertainty σ (right)\n"
+        "σ = aleatoric uncertainty = std-dev of the random measurement noise on the PET/TAC signal "
+        "(normalized intensity units; larger σ = noisier data)",
+        fontsize=11,
     )
 
     with tqdm(total=5, desc="  Plotting panels", leave=False) as pbar:
@@ -436,9 +438,9 @@ def hetero_visualize(
         vmin, vmax = float(np.percentile(sigma_img, 1)), float(np.percentile(sigma_img, 99))
         ax_s = fig.add_subplot(gs[0:2, 2] if has_image else gs[:, 2])
         im_s = ax_s.imshow(sigma_img, cmap="plasma", vmin=vmin, vmax=vmax)
-        ax_s.set_title("σ_aleatoric\n(per-voxel TAC noise std)", fontsize=10)
+        ax_s.set_title("Aleatoric uncertainty  σ\n(per-voxel measurement-noise std on the TAC)", fontsize=10)
         ax_s.axis("off")
-        plt.colorbar(im_s, ax=ax_s, fraction=0.046, pad=0.04)
+        plt.colorbar(im_s, ax=ax_s, fraction=0.046, pad=0.04, label="σ  (noise std, norm. intensity)")
         pbar.update(1)
 
     if has_image:
@@ -456,9 +458,9 @@ def hetero_visualize(
         ax_overlay.imshow(img, cmap="gray", alpha=0.35)
         overlay = sigma_img
         im_ov = ax_overlay.imshow(overlay, cmap="inferno", alpha=0.55, vmin=vmin, vmax=vmax)
-        ax_overlay.set_title("Per-voxel σ_aleatoric overlay", fontsize=10)
+        ax_overlay.set_title("Aleatoric uncertainty σ — overlay on PET", fontsize=10)
         ax_overlay.axis("off")
-        plt.colorbar(im_ov, ax=ax_overlay, fraction=0.046, pad=0.04)
+        plt.colorbar(im_ov, ax=ax_overlay, fraction=0.046, pad=0.04, label="σ  (noise std)")
 
     print(f"[INFO] Saving composite figure to {save_path}")
     plt.savefig(save_path, dpi=150, bbox_inches="tight")
@@ -494,8 +496,10 @@ def combined_visualize(
 
     fig, axes = plt.subplots(1, 4, figsize=(26, 7))
     fig.suptitle(
-        "Aleatoric Uncertainty  —  Part 1 (homoscedastic)  |  Part 2 (heteroscedastic)  |  Image-based (Poisson)",
-        fontsize=13,
+        "Aleatoric Uncertainty  —  Part 1 (homoscedastic)  |  Part 2 (heteroscedastic)  |  Image-based (Poisson)\n"
+        "σ = aleatoric uncertainty = std-dev of the random measurement noise on the PET signal "
+        "(normalized intensity units; larger σ = noisier data)",
+        fontsize=12,
     )
 
     vmin2 = float(np.percentile(sigma_hetero, 1))
@@ -526,10 +530,11 @@ def combined_visualize(
     axes[2].imshow(img, cmap="gray", alpha=0.35)
     im2 = axes[2].imshow(sigma_hetero, cmap="inferno", alpha=0.6, vmin=vmin2, vmax=vmax2)
     axes[2].set_title(
-        f"Part 2 — Heteroscedastic\nσ̄ = {sigma_hetero_mean:.5f} ± {sigma_hetero_std:.5f}\n(per-voxel)"
+        f"Part 2 — Heteroscedastic\naleatoric σ̄ = {sigma_hetero_mean:.5f} ± {sigma_hetero_std:.5f}\n"
+        "(per-voxel measurement-noise std)"
     )
     axes[2].axis("off")
-    plt.colorbar(im2, ax=axes[2], fraction=0.046, pad=0.04, label="σ_aleatoric")
+    plt.colorbar(im2, ax=axes[2], fraction=0.046, pad=0.04, label="aleatoric σ  (noise std)")
 
     axes[3].imshow(img, cmap="gray", alpha=0.4)
     im3 = axes[3].imshow(poisson_sigma, cmap="plasma", alpha=0.6, vmin=vp1, vmax=vp99)
