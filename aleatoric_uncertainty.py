@@ -153,16 +153,22 @@ def homo_visualize(sigma_dict: dict, save_dir: str = "laplace_outputs", image_fr
         ax_img.set_title("Validation PET image")
         ax_img.axis("off")
 
-        const_map = np.ones_like(img) * sigma_mean
-        im = ax_overlay.imshow(img, cmap="gray", alpha=0.35)
-        im2 = ax_overlay.imshow(const_map, cmap="plasma", alpha=0.55, vmin=sigma_mean * 0.9, vmax=sigma_mean * 1.1)
+        # Constant field → uniform tint + text label, no colorbar
+        # (a single global scalar has no spatial variation to decode).
+        ax_overlay.imshow(img, cmap="gray", alpha=0.35)
+        ax_overlay.imshow(np.ones_like(img), cmap="Purples", alpha=0.30, vmin=0, vmax=1)
         ax_overlay.set_title(
             "Homoscedastic uncertainty overlay\n"
-            f"constant σ_aleatoric = {sigma_mean:.5f}",
+            "(uniform — same σ for every voxel)",
             fontsize=10,
         )
         ax_overlay.axis("off")
-        plt.colorbar(im2, ax=ax_overlay, fraction=0.046, pad=0.04)
+        ax_overlay.text(
+            0.5, 0.5, f"σ_aleatoric = {sigma_mean:.5f}\n(constant)",
+            transform=ax_overlay.transAxes, ha="center", va="center",
+            fontsize=12, color="white", fontweight="bold",
+            bbox=dict(boxstyle="round", facecolor="black", alpha=0.6),
+        )
 
     plt.tight_layout()
     img_path = os.path.join(save_dir, f"aleatoric_homo_{ts}.png")
@@ -492,9 +498,6 @@ def combined_visualize(
         fontsize=13,
     )
 
-    homo_map = np.full_like(img, sigma_homo_mean)
-    vlo = max(0.0, sigma_homo_mean - 3 * sigma_homo_std) if sigma_homo_std > 0 else sigma_homo_mean * 0.9
-    vhi = sigma_homo_mean + 3 * sigma_homo_std if sigma_homo_std > 0 else sigma_homo_mean * 1.1
     vmin2 = float(np.percentile(sigma_hetero, 1))
     vmax2 = float(np.percentile(sigma_hetero, 99))
     vp1   = float(np.percentile(poisson_sigma, 1))
@@ -505,13 +508,20 @@ def combined_visualize(
     axes[0].set_title("PET image  (frame 61, z=230)")
     axes[0].axis("off")
 
+    # Part 1 is a single global scalar → uniform tint + text label.
+    # No colorbar: a constant field has no spatial variation to decode.
     axes[1].imshow(img, cmap="gray", alpha=0.5)
-    im1 = axes[1].imshow(homo_map, cmap="plasma", alpha=0.5, vmin=vlo, vmax=vhi)
+    axes[1].imshow(np.ones_like(img), cmap="Purples", alpha=0.30, vmin=0, vmax=1)
     axes[1].set_title(
         f"Part 1 — Homoscedastic\nσ = {sigma_homo_mean:.5f}{std_label}\n(constant across all voxels)"
     )
     axes[1].axis("off")
-    plt.colorbar(im1, ax=axes[1], fraction=0.046, pad=0.04, label="σ_noise")
+    axes[1].text(
+        0.5, 0.5, f"σ = {sigma_homo_mean:.5f}\n(uniform)",
+        transform=axes[1].transAxes, ha="center", va="center",
+        fontsize=13, color="white", fontweight="bold",
+        bbox=dict(boxstyle="round", facecolor="black", alpha=0.55),
+    )
 
     axes[2].imshow(img, cmap="gray", alpha=0.35)
     im2 = axes[2].imshow(sigma_hetero, cmap="inferno", alpha=0.6, vmin=vmin2, vmax=vmax2)
