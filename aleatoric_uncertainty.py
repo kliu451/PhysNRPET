@@ -66,59 +66,6 @@ class _Timer:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# BODY MASK  (separate patient from air background)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def body_mask(image: np.ndarray, corner_frac: float = 0.05, k_sigma: float = 5.0) -> np.ndarray:
-    """
-    Segment the patient body from the air background in a 2D PET slice.
-
-    PET scans are centred with air at the edges, so:
-      1. Estimate the air noise floor from the image corners (guaranteed air).
-      2. Threshold just above it: thr = corner_mean + k_sigma * corner_std.
-      3. Flood-fill background INWARD from the border; the body is everything
-         NOT connected to the edge. This protects low-uptake *interior* tissue
-         (lung, fat) that a plain global threshold would wrongly delete.
-      4. Keep the largest connected component and close small gaps.
-
-    Returns a boolean mask (True = body), same (H, W) as `image`.
-    Note: Otsu is deliberately avoided — on PET it lands far too high
-    (separates hot organs from everything) and discards most of the body.
-    """
-    from scipy import ndimage as ndi
-
-    img = np.asarray(image, dtype=float)
-    if img.ndim == 3 and img.shape[-1] == 1:
-        img = img[..., 0]
-    imn = (img - img.min()) / (img.max() - img.min() + 1e-8)
-
-    H, W = imn.shape
-    m = max(4, int(round(min(H, W) * corner_frac)))
-    corners = np.concatenate([
-        imn[:m, :m].ravel(), imn[:m, -m:].ravel(),
-        imn[-m:, :m].ravel(), imn[-m:, -m:].ravel(),
-    ])
-    thr = float(corners.mean() + k_sigma * corners.std())
-
-    # background = dark region connected to the image border (flood-fill from edges)
-    dark = imn <= thr
-    lbl, _ = ndi.label(dark)
-    border_labels = set(lbl[0, :]) | set(lbl[-1, :]) | set(lbl[:, 0]) | set(lbl[:, -1])
-    border_labels.discard(0)
-    background = np.isin(lbl, list(border_labels))
-    body = ~background
-
-    # largest connected component, then close small gaps
-    lbl2, n2 = ndi.label(body)
-    if n2 > 0:
-        sizes = np.bincount(lbl2.ravel()); sizes[0] = 0
-        body = lbl2 == sizes.argmax()
-    body = ndi.binary_closing(body, structure=np.ones((5, 5)))
-    print(f"  [DEBUG] body_mask: thr={thr:.5f}  body={100 * body.mean():.1f}% of slice")
-    return body
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # PART 1 — HOMOSCEDASTIC
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -450,16 +397,10 @@ def hetero_visualize(
     spatial_shape:   tuple,
     save_path:       str = "aleatoric_hetero.png",
     base_image:      np.ndarray | None = None,
-    mask:            np.ndarray | None = None,
 ):
     print(f"[INFO] Starting hetero_visualize for shape {spatial_shape}")
     h, w     = spatial_shape
     k_names  = ["K1", "k2", "k3", "Vb"]
-
-    # Background → NaN so it renders transparent and percentile scaling
-    # is computed over body voxels only (not diluted by ~70% air).
-    def _apply_mask(arr2d):
-        return np.where(mask, arr2d, np.nan) if mask is not None else arr2d
 
     has_image = base_image is not None
     if has_image:
@@ -483,16 +424,16 @@ def hetero_visualize(
         positions = [(0, 0), (0, 1), (1, 0), (1, 1)]
         for (r, c), name in zip(positions, k_names):
             ax  = fig.add_subplot(gs[r, c])
-            img = np.rot90(_apply_mask(k_mean[:, k_names.index(name)].reshape(h, w).numpy()), k=1)
-            vmin, vmax = float(np.nanpercentile(img, 1)), float(np.nanpercentile(img, 99))
+            img = np.rot90(k_mean[:, k_names.index(name)].reshape(h, w).numpy(), k=1)
+            vmin, vmax = float(np.percentile(img, 1)), float(np.percentile(img, 99))
             im  = ax.imshow(img, cmap="hot", vmin=vmin, vmax=vmax)
             ax.set_title(f"{name}  (MAP)", fontsize=10)
             ax.axis("off")
             plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
             pbar.update(1)
 
-        sigma_img = np.rot90(_apply_mask(aleatoric_sigma.reshape(h, w).numpy()), k=1)
-        vmin, vmax = float(np.nanpercentile(sigma_img, 1)), float(np.nanpercentile(sigma_img, 99))
+        sigma_img = np.rot90(aleatoric_sigma.reshape(h, w).numpy(), k=1)
+        vmin, vmax = float(np.percentile(sigma_img, 1)), float(np.percentile(sigma_img, 99))
         ax_s = fig.add_subplot(gs[0:2, 2] if has_image else gs[:, 2])
         im_s = ax_s.imshow(sigma_img, cmap="plasma", vmin=vmin, vmax=vmax)
         ax_s.set_title("σ_aleatoric\n(per-voxel TAC noise std)", fontsize=10)
@@ -531,14 +472,8 @@ def combined_visualize(
     base_image:      np.ndarray,
     save_dir:        str = "laplace_outputs",
     ts:              str | None = None,
-    mask:            np.ndarray | None = None,
 ) -> str:
-    """PET | Part 1 (homo) | Part 2 (hetero) | Image-based (Poisson) — all as overlays.
-
-    If `mask` (body mask, True=body) is given, the per-voxel maps (Part 2 and
-    Poisson) are restricted to body voxels: background → NaN (transparent), and
-    the reported statistics are robust median + IQR over the body only.
-    """
+    """PET | Part 1 (homo) | Part 2 (hetero) | Image-based (Poisson) — all as overlays."""
     ts  = ts or datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     h, w = spatial_shape
 
@@ -546,52 +481,37 @@ def combined_visualize(
     sigma_homo_mean = float(np.mean(sigmas))
     sigma_homo_std  = float(np.std(sigmas)) if len(sigmas) > 1 else 0.0
 
-    # ---- unrotated arrays (for masking + stats) ----
-    sig_hw = aleatoric_sigma.reshape(h, w).numpy()
-    img_hw = np.array(base_image, dtype=float)
-    if img_hw.ndim == 3 and img_hw.shape[-1] == 1:
-        img_hw = img_hw[..., 0]
-    img_hw = (img_hw - np.nanmin(img_hw)) / ((np.nanmax(img_hw) - np.nanmin(img_hw)) + 1e-8)
-    poisson_hw = np.sqrt(np.clip(img_hw, 0, None))
+    sigma_hetero      = np.rot90(aleatoric_sigma.reshape(h, w).numpy(), k=1)
+    sigma_hetero_mean = float(aleatoric_sigma.mean())
+    sigma_hetero_std  = float(aleatoric_sigma.std())
 
-    if mask is None:
-        mask = np.ones(sig_hw.shape, dtype=bool)
-    body_pct = 100 * mask.mean()
+    img = np.array(base_image, dtype=float)
+    if img.ndim == 3 and img.shape[-1] == 1:
+        img = img[..., 0]
+    img = np.rot90((img - np.nanmin(img)) / ((np.nanmax(img) - np.nanmin(img)) + 1e-8), k=1)
 
-    def _stats(a):                       # robust summary over body voxels
-        b = a[mask]
-        return np.median(b), np.percentile(b, 25), np.percentile(b, 75)
-    sh_med, sh_q1, sh_q3 = _stats(sig_hw)
-    pj_med, pj_q1, pj_q3 = _stats(poisson_hw)
-
-    def _disp(a):                        # mask → NaN, then rotate upright for display
-        return np.rot90(np.where(mask, a, np.nan), k=1)
-    img           = np.rot90(img_hw, k=1)          # PET panel: show full image
-    sigma_hetero  = _disp(sig_hw)
-    poisson_sigma = _disp(poisson_hw)
-    mask_rot      = np.rot90(mask, k=1)
+    poisson_sigma = np.sqrt(np.clip(img, 0, None))
 
     fig, axes = plt.subplots(1, 4, figsize=(26, 7))
     fig.suptitle(
-        "Aleatoric Uncertainty  —  Part 1 (homoscedastic)  |  Part 2 (heteroscedastic)  |  Image-based (Poisson)"
-        f"   [body-masked, {body_pct:.0f}% of slice]",
+        "Aleatoric Uncertainty  —  Part 1 (homoscedastic)  |  Part 2 (heteroscedastic)  |  Image-based (Poisson)",
         fontsize=13,
     )
 
-    vmin2 = float(np.nanpercentile(sigma_hetero, 1))
-    vmax2 = float(np.nanpercentile(sigma_hetero, 99))
-    vp1   = float(np.nanpercentile(poisson_sigma, 1))
-    vp99  = float(np.nanpercentile(poisson_sigma, 99))
+    vmin2 = float(np.percentile(sigma_hetero, 1))
+    vmax2 = float(np.percentile(sigma_hetero, 99))
+    vp1   = float(np.percentile(poisson_sigma, 1))
+    vp99  = float(np.percentile(poisson_sigma, 99))
     std_label = f" ± {sigma_homo_std:.5f}" if sigma_homo_std > 0 else ""
 
     axes[0].imshow(img, cmap="gray")
     axes[0].set_title("PET image  (frame 61, z=230)")
     axes[0].axis("off")
 
-    # Part 1 is a single global scalar → uniform tint over the body + text label.
+    # Part 1 is a single global scalar → uniform tint + text label.
     # No colorbar: a constant field has no spatial variation to decode.
     axes[1].imshow(img, cmap="gray", alpha=0.5)
-    axes[1].imshow(np.where(mask_rot, 1.0, np.nan), cmap="Purples", alpha=0.35, vmin=0, vmax=1)
+    axes[1].imshow(np.ones_like(img), cmap="Purples", alpha=0.30, vmin=0, vmax=1)
     axes[1].set_title(
         f"Part 1 — Homoscedastic\nσ = {sigma_homo_mean:.5f}{std_label}\n(constant across all voxels)"
     )
@@ -606,7 +526,7 @@ def combined_visualize(
     axes[2].imshow(img, cmap="gray", alpha=0.35)
     im2 = axes[2].imshow(sigma_hetero, cmap="inferno", alpha=0.6, vmin=vmin2, vmax=vmax2)
     axes[2].set_title(
-        f"Part 2 — Heteroscedastic\nmedian = {sh_med:.5f}  IQR [{sh_q1:.5f}, {sh_q3:.5f}]\n(per-voxel, body)"
+        f"Part 2 — Heteroscedastic\nσ̄ = {sigma_hetero_mean:.5f} ± {sigma_hetero_std:.5f}\n(per-voxel)"
     )
     axes[2].axis("off")
     plt.colorbar(im2, ax=axes[2], fraction=0.046, pad=0.04, label="σ_aleatoric")
@@ -614,7 +534,7 @@ def combined_visualize(
     axes[3].imshow(img, cmap="gray", alpha=0.4)
     im3 = axes[3].imshow(poisson_sigma, cmap="plasma", alpha=0.6, vmin=vp1, vmax=vp99)
     axes[3].set_title(
-        f"Image-based — Poisson σ ∝ √I\nmedian = {pj_med:.5f}  IQR [{pj_q1:.5f}, {pj_q3:.5f}]\n(no model, body)"
+        f"Image-based — Poisson σ ∝ √I\nσ̄ = {poisson_sigma.mean():.5f} ± {poisson_sigma.std():.5f}\n(no model)"
     )
     axes[3].axis("off")
     plt.colorbar(im3, ax=axes[3], fraction=0.046, pad=0.04, label="σ_poisson")
@@ -825,14 +745,9 @@ def main():
             np.save(np_k_path, k_mean.numpy())
             np.save(np_s_path, aleatoric_sigma.numpy())
 
-            # Body mask (separate patient from air) — built from the displayed slice.
-            print("[INFO] Building body mask (corner noise floor + flood-fill)...")
-            mask2d = body_mask(base_image)
-            hh, ww = val_data.spatial_shape
-
             plot_path = os.path.join(args.output_dir, f"aleatoric_hetero_{ts}.png")
             hetero_visualize(k_mean, aleatoric_sigma, val_data.spatial_shape,
-                             save_path=plot_path, base_image=base_image, mask=mask2d)
+                             save_path=plot_path, base_image=base_image)
 
             print("\n[INFO] Compiling Summary Statistics...")
             k_names = ["K1", "k2", "k3", "Vb"]
@@ -853,22 +768,7 @@ def main():
                 "Per-voxel aleatoric sigma  exp(0.5 * log_var):",
                 f"  mean={aleatoric_sigma.mean():.5f}  std={aleatoric_sigma.std():.5f}  "
                 f"min={aleatoric_sigma.min():.5f}  max={aleatoric_sigma.max():.5f}",
-                "",
-                f"Body-masked (flood-fill, {100 * mask2d.mean():.1f}% of slice) — robust stats:",
-                "  (median + IQR over body voxels only; background air excluded)",
             ]
-            sig_body = aleatoric_sigma.reshape(hh, ww).numpy()[mask2d]
-            lines.append(
-                f"  sigma   median={np.median(sig_body):8.5f}  "
-                f"IQR=[{np.percentile(sig_body, 25):.5f}, {np.percentile(sig_body, 75):.5f}]  "
-                f"mean={sig_body.mean():.5f}"
-            )
-            for i, name in enumerate(k_names):
-                vb = k_mean[:, i].reshape(hh, ww).numpy()[mask2d]
-                lines.append(
-                    f"  {name:<5}   median={np.median(vb):8.4f}  "
-                    f"IQR=[{np.percentile(vb, 25):.4f}, {np.percentile(vb, 75):.4f}]"
-                )
             txt_path = os.path.join(args.output_dir, f"aleatoric_hetero_{ts}_summary.txt")
             with open(txt_path, "w") as f:
                 f.write("\n".join(lines) + "\n")
@@ -879,7 +779,7 @@ def main():
         combined_visualize(
             sigma_dict, aleatoric_sigma,
             val_data.spatial_shape, base_image,
-            save_dir=args.output_dir, ts=ts, mask=mask2d,
+            save_dir=args.output_dir, ts=ts,
         )
 
 
