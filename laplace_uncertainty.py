@@ -153,9 +153,17 @@ def fit_laplace(
     with _Timer("GGN Hessian"):
         la.fit(_TqdmLoader(loader, desc="  batches", total=len(loader)))
 
-    with _Timer("Prior precision (marglik)"):
-        la.optimize_prior_precision(method="marglik", n_steps=n_steps, lr=0.1,
-                                    verbose=True, progress_bar=True)
+    with _Timer("Prior precision + sigma_noise (marglik)"):
+        log_prior_prec  = torch.tensor(0.0, requires_grad=True)
+        log_sigma_noise = torch.tensor(0.0, requires_grad=True)
+        opt = torch.optim.Adam([log_prior_prec, log_sigma_noise], lr=0.1)
+        for _ in tqdm(range(n_steps), desc="  marglik steps"):
+            opt.zero_grad()
+            loss = -la.log_marginal_likelihood(log_prior_prec.exp(), log_sigma_noise.exp())
+            loss.backward()
+            opt.step()
+        la.prior_precision = log_prior_prec.exp().detach()
+        la.sigma_noise     = log_sigma_noise.exp().detach()
         print(f"  prior precision = {la.prior_precision.item():.4f}")
         print(f"  sigma noise     = {la.sigma_noise.item():.4f}")
 
@@ -273,8 +281,8 @@ def visualize(
     fig.suptitle("Kinetic Parameters — MAP Estimate & Laplace Posterior Std", fontsize=13)
 
     for i, name in enumerate(k_names):
-        ki_map = k_mean[:, i].reshape(h, w).numpy()
-        ki_std = k_std[:, i].reshape(h, w).numpy()
+        ki_map = np.rot90(k_mean[:, i].reshape(h, w).numpy(), k=1)
+        ki_std = np.rot90(k_std[:, i].reshape(h, w).numpy(), k=1)
 
         im0 = axes[0, i].imshow(ki_map, cmap="hot")
         axes[0, i].set_title(f"{name} (MAP)")
@@ -316,7 +324,7 @@ def visualize_combined(
     for r, (data, cmap, row_label) in enumerate(zip(all_data, cmaps, row_labels)):
         for c, name in enumerate(k_names):
             ax  = axes[r, c]
-            img = data[:, c].reshape(h, w).cpu().numpy()
+            img = np.rot90(data[:, c].reshape(h, w).cpu().numpy(), k=1)
             vmin = float(np.percentile(img, 1))
             vmax = float(np.percentile(img, 99))
             im  = ax.imshow(img, cmap=cmap, vmin=vmin, vmax=vmax)
