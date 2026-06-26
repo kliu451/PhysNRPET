@@ -467,6 +467,32 @@ def hetero_visualize(
     plt.close()
 
 
+def poisson_from_frames(z_slice: int = 230, frame_idx: int = 61):
+    """
+    Image-based Poisson noise σ ∝ √I, computed per frame.
+
+    Returns two (D, W) maps, both on the same normalized-intensity scale:
+      single : √I  for one frame (frame_idx)           — Part 3
+      allfrm : mean_t √I_t  over ALL frames of z_slice  — Part 4
+    Returns (None, None) if the cached slice cannot be found.
+    """
+    base   = os.path.dirname(os.path.abspath(__file__))
+    cache  = os.path.join(base, f"liverslice_z{z_slice}.pt")
+    legacy = os.path.join(base, "liverslice09.pt")
+    path = cache if os.path.exists(cache) else (legacy if z_slice == 230 and os.path.exists(legacy) else None)
+    if path is None:
+        print(f"[WARN] Poisson: no cached slice for z={z_slice}; skipping Part 4.")
+        return None, None
+    print(f"[INFO] Poisson: loading all frames from {os.path.basename(path)} for Part 4 ...")
+    frames = torch.load(path, weights_only=False)          # (T, D, 1, W), normalized [0,1]
+    f = frames[:, :, 0, :].clamp(min=0).numpy()            # (T, D, W)
+    poisson_single = np.sqrt(f[frame_idx])                 # (D, W)  — one frame
+    poisson_all    = np.sqrt(f).mean(axis=0)               # (D, W)  — mean over T frames
+    print(f"  [DEBUG] Poisson  single-frame mean={poisson_single.mean():.5f}  "
+          f"all-frames mean={poisson_all.mean():.5f}  (T={f.shape[0]} frames)")
+    return poisson_single, poisson_all
+
+
 def combined_visualize(
     sigma_dict:      dict,
     aleatoric_sigma: torch.Tensor,
@@ -474,8 +500,10 @@ def combined_visualize(
     base_image:      np.ndarray,
     save_dir:        str = "laplace_outputs",
     ts:              str | None = None,
+    poisson_single:  np.ndarray | None = None,
+    poisson_all:     np.ndarray | None = None,
 ) -> str:
-    """PET | Part 1 (homo) | Part 2 (hetero) | Image-based (Poisson) — all as overlays."""
+    """One row: PET | Part 1 (homo) | Part 2 (hetero) | Part 3 (Poisson, 1 frame) | Part 4 (Poisson, all frames)."""
     ts  = ts or datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     h, w = spatial_shape
 
@@ -492,33 +520,37 @@ def combined_visualize(
         img = img[..., 0]
     img = np.rot90((img - np.nanmin(img)) / ((np.nanmax(img) - np.nanmin(img)) + 1e-8), k=1)
 
-    poisson_sigma = np.sqrt(np.clip(img, 0, None))
+    # Part 3 (single frame): fall back to √(displayed PET) if not supplied.
+    p3 = np.rot90(poisson_single, k=1) if poisson_single is not None else np.sqrt(np.clip(img, 0, None))
+    has_p4 = poisson_all is not None
+    p4 = np.rot90(poisson_all, k=1) if has_p4 else None
 
-    fig, axes = plt.subplots(1, 4, figsize=(26, 7))
+    ncols = 5 if has_p4 else 4
+    fig, axes = plt.subplots(1, ncols, figsize=(6.2 * ncols, 7))
     fig.suptitle(
-        "Aleatoric Uncertainty  —  Part 1 (homoscedastic)  |  Part 2 (heteroscedastic)  |  Image-based (Poisson)\n"
+        "Aleatoric Uncertainty across methods\n"
         "σ = aleatoric uncertainty = std-dev of the random measurement noise on the PET signal "
         "(normalized intensity units; larger σ = noisier data)",
-        fontsize=12,
+        fontsize=13, fontweight="bold",
     )
+
+    def _heading(ax, part, name, method, stat):
+        ax.set_title(f"{part} — {name}\n{method}\n{stat}", fontsize=10.5)
 
     vmin2 = float(np.percentile(sigma_hetero, 1))
     vmax2 = float(np.percentile(sigma_hetero, 99))
-    vp1   = float(np.percentile(poisson_sigma, 1))
-    vp99  = float(np.percentile(poisson_sigma, 99))
     std_label = f" ± {sigma_homo_std:.5f}" if sigma_homo_std > 0 else ""
 
+    # ── Panel 0 — PET image ────────────────────────────────────────────────
     axes[0].imshow(img, cmap="gray")
-    axes[0].set_title("PET image  (frame 61, z=230)")
+    axes[0].set_title("PET image\n(frame 61, z=230)\nreference", fontsize=10.5)
     axes[0].axis("off")
 
-    # Part 1 is a single global scalar → uniform tint + text label.
-    # No colorbar: a constant field has no spatial variation to decode.
+    # ── Panel 1 — Part 1 Homoscedastic (constant) ─────────────────────────
     axes[1].imshow(img, cmap="gray", alpha=0.5)
     axes[1].imshow(np.ones_like(img), cmap="Purples", alpha=0.30, vmin=0, vmax=1)
-    axes[1].set_title(
-        f"Part 1 — Homoscedastic\nσ = {sigma_homo_mean:.5f}{std_label}\n(constant across all voxels)"
-    )
+    _heading(axes[1], "Part 1", "Homoscedastic",
+             "model σ, one global value", f"σ = {sigma_homo_mean:.5f}{std_label}")
     axes[1].axis("off")
     axes[1].text(
         0.5, 0.5, f"σ = {sigma_homo_mean:.5f}\n(uniform)",
@@ -527,22 +559,32 @@ def combined_visualize(
         bbox=dict(boxstyle="round", facecolor="black", alpha=0.55),
     )
 
+    # ── Panel 2 — Part 2 Heteroscedastic (per-voxel) ──────────────────────
     axes[2].imshow(img, cmap="gray", alpha=0.35)
     im2 = axes[2].imshow(sigma_hetero, cmap="inferno", alpha=0.6, vmin=vmin2, vmax=vmax2)
-    axes[2].set_title(
-        f"Part 2 — Heteroscedastic\naleatoric σ̄ = {sigma_hetero_mean:.5f} ± {sigma_hetero_std:.5f}\n"
-        "(per-voxel measurement-noise std)"
-    )
+    _heading(axes[2], "Part 2", "Heteroscedastic",
+             "model σ, per-voxel", f"σ̄ = {sigma_hetero_mean:.5f} ± {sigma_hetero_std:.5f}")
     axes[2].axis("off")
     plt.colorbar(im2, ax=axes[2], fraction=0.046, pad=0.04, label="aleatoric σ  (noise std)")
 
+    # ── Panel 3 — Part 3 Poisson, single frame ────────────────────────────
+    vp1, vp99 = float(np.percentile(p3, 1)), float(np.percentile(p3, 99))
     axes[3].imshow(img, cmap="gray", alpha=0.4)
-    im3 = axes[3].imshow(poisson_sigma, cmap="plasma", alpha=0.6, vmin=vp1, vmax=vp99)
-    axes[3].set_title(
-        f"Image-based — Poisson σ ∝ √I\nσ̄ = {poisson_sigma.mean():.5f} ± {poisson_sigma.std():.5f}\n(no model)"
-    )
+    im3 = axes[3].imshow(p3, cmap="plasma", alpha=0.6, vmin=vp1, vmax=vp99)
+    _heading(axes[3], "Part 3", "Poisson — single frame",
+             "√I, frame 61 only (no model)", f"σ̄ = {p3.mean():.5f} ± {p3.std():.5f}")
     axes[3].axis("off")
-    plt.colorbar(im3, ax=axes[3], fraction=0.046, pad=0.04, label="σ_poisson")
+    plt.colorbar(im3, ax=axes[3], fraction=0.046, pad=0.04, label="σ_poisson  (√I)")
+
+    # ── Panel 4 — Part 4 Poisson, all frames ──────────────────────────────
+    if has_p4:
+        vq1, vq99 = float(np.percentile(p4, 1)), float(np.percentile(p4, 99))
+        axes[4].imshow(img, cmap="gray", alpha=0.4)
+        im4 = axes[4].imshow(p4, cmap="plasma", alpha=0.6, vmin=vq1, vmax=vq99)
+        _heading(axes[4], "Part 4", "Poisson — all 62 frames",
+                 "mean_t √Iₜ over the dynamic series (no model)", f"σ̄ = {p4.mean():.5f} ± {p4.std():.5f}")
+        axes[4].axis("off")
+        plt.colorbar(im4, ax=axes[4], fraction=0.046, pad=0.04, label="σ_poisson  (mean √Iₜ)")
 
     plt.tight_layout()
     save_path = os.path.join(save_dir, f"aleatoric_combined_{ts}.png")
@@ -781,10 +823,13 @@ def main():
 
     # ── Combined visualization when both parts ran ─────────────────────────
     if args.homo and do_eval and sigma_dict and aleatoric_sigma is not None:
+        # Part 3 = single-frame Poisson, Part 4 = all-frames Poisson
+        poisson_single, poisson_all = poisson_from_frames(z_slice=args.z_slice, frame_idx=61)
         combined_visualize(
             sigma_dict, aleatoric_sigma,
             val_data.spatial_shape, base_image,
             save_dir=args.output_dir, ts=ts,
+            poisson_single=poisson_single, poisson_all=poisson_all,
         )
 
 
